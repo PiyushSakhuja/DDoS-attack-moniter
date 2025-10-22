@@ -1,15 +1,36 @@
 <!-- static/index.html -->
 <!doctype html>
 <html>
+
 <head>
   <meta charset="utf-8" />
   <title>Live DDoS Map - Prototype</title>
   <style>
-    html,body { height:100%; margin:0; background:#0b1020; color:#eee; }
-    #globeViz { width:100%; height:100vh; }
-    .badge { position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,0.5); padding:8px 12px; border-radius:6px; font-family: sans-serif; }
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+      background: #0b1020;
+      color: #eee;
+    }
+
+    #globeViz {
+      width: 100%;
+      height: 100vh;
+    }
+
+    .badge {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      background: rgba(0, 0, 0, 0.5);
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-family: sans-serif;
+    }
   </style>
 </head>
+
 <body>
   <div class="badge">Live DDoS Map — prototype (mock data)</div>
   <div id="globeViz"></div>
@@ -56,6 +77,12 @@
     function addAttackEvent(ev) {
       // ev: {ip, lat, lon, confidence, magnitude, ts}
       // convert lat/lon to three-globe format:
+      if (ev.lat === null || ev.lat === undefined || (ev.lng === null && ev.lon === null)) {
+        console.log("Skipping event with no coords:", ev.ip, ev.geo);
+        return;
+      }
+      const lat = ev.lat;
+      const lng = (ev.lng !== undefined && ev.lng !== null) ? ev.lng : ev.lon;
       points.push({
         lat: ev.lat,
         lng: ev.lon,
@@ -72,7 +99,7 @@
     }
 
     // websocket connection
-    const ws = new WebSocket(`ws://${location.host}/ws`);
+    const ws = new WebSocket("ws://localhost:8000/ws");
     ws.onopen = () => {
       // send a dummy ping to keep connection alive in server loop
       setInterval(() => ws.send('ping'), 15000);
@@ -86,10 +113,10 @@
 
     // point styling and pulse animation
     globe.pointAltitude('size')
-         .pointRadius(0.7)
-         .pointsTransitionDuration(0)
-         .pointsMerge(true)
-         .pointColor(d => d.color);
+      .pointRadius(0.7)
+      .pointsTransitionDuration(0)
+      .pointsMerge(true)
+      .pointColor(d => d.color);
 
     // rotate animation
     (function animate() {
@@ -119,4 +146,5 @@
     });
   </script>
 </body>
+
 </html>

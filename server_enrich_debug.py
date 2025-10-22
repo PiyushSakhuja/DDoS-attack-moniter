@@ -1,4 +1,4 @@
-# server_enrich_debug_final.py
+
 import asyncio, os, json, time, math, traceback
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
@@ -6,6 +6,7 @@ from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
 import geoip2.database
 import uvicorn
+import ipaddress
 import requests
 import shelve
 from typing import Optional
@@ -13,7 +14,7 @@ from typing import Optional
 # ---------- CONFIG ----------
 ABUSEIPDB_KEY = os.getenv("ABUSEIPDB_KEY", "f3c6d74c7d0529710d6d7535f548476b18d269404785c47c5b9e12852341b9c53530c16f7dfe46d9")  # set before starting to use AbuseIPDB
 # absolute path to your GeoLite2-City.mmdb (use raw string r"...")
-MAXMIND_DB_PATH = r"C:\Users\PIYUSH SAKHUJA\OneDrive\Desktop\ddos attack\data\GeoLite2-City.mmdb"
+MAXMIND_DB_PATH = r"C:\Users\PIYUSH SAKHUJA\OneDrive\Desktop\ddos attack\DDoS-attack-moniter\data\GeoLite2-City.mmdb"
 INCOMING_QUEUE = "incoming_ips.jsonl"
 CACHE_TTL = 24 * 3600
 PUBLISH_THRESHOLD = float(os.getenv("PUBLISH_THRESHOLD", "0.5"))
@@ -122,6 +123,8 @@ def abuseipdb_check(ip: str) -> Optional[dict]:
         print(f"[ABUSE] No AbuseIPDB key set; skipping check for {ip}")
         return None
     try:
+        print(f"[ABUSE-DEBUG] Checking AbuseIPDB for {ip} ...")
+
         url = "https://api.abuseipdb.com/api/v2/check"
         headers = {"Key": ABUSEIPDB_KEY, "Accept": "application/json"}
         params = {"ipAddress": ip}
@@ -225,16 +228,19 @@ async def watch_queue_and_process():
                     packet_rate = rec.get("packet_rate")
                     ts = rec.get("ts", int(time.time()))
                     print(f"[WATCHER] Processing line -> ip={ip} magnitude={magnitude} packet_rate={packet_rate} ts={ts}")
-                    cached = cache_get(ip)
-                    if cached:
-                        abuse = cached.get("abuse")
-                        geo = cached.get("geo")
+                    # --- Enrichment flow (replace old cached logic) ---
+                    enrich = get_enrich_cache(ip)
+                    if enrich:
+                        abuse = enrich.get("abuse")
+                        geo = enrich.get("geo")
                         print(f"[CACHE] Hit for {ip}: abuse={abuse} geo={geo}")
                     else:
                         abuse = abuseipdb_check(ip)
-                        geo = geolocate_ip(ip)
-                        cache_set(ip, {"abuse": abuse, "geo": geo})
+                        geo = geolocate_with_fallback(ip)
+                        # store unified enrichment
+                        set_enrich_cache(ip, abuse, geo)
                         print(f"[ENRICH] For {ip}: abuse={abuse} geo={geo}")
+
                     score = compute_score(abuse, magnitude, packet_rate, geo)
                     print(f"[SCORE] ip={ip} computed_score={score}")
                     should_publish = (score >= PUBLISH_THRESHOLD) or DEBUG_FORCE_PUBLISH
@@ -242,9 +248,9 @@ async def watch_queue_and_process():
                     if should_publish:
                         evt = {
                             "ip": ip,
-                            "lat": geo.get("lat", 0.0),
-                            "lon": geo.get("lon", 0.0),
-                            "lng": geo.get("lon", 0.0),   # duplicate for frontend flexibility
+                            "lat": geo.get("lat"),       # keep None if unknown
+                            "lon": geo.get("lon"),       # keep None if unknown
+                            "lng": geo.get("lon"),       # duplicate for frontend flexibility
                             "confidence": round(score, 3),
                             "magnitude": magnitude,
                             "abuse": abuse or {},
@@ -260,6 +266,67 @@ async def watch_queue_and_process():
             print("[WATCHER ERROR]", e)
             traceback.print_exc()
         await asyncio.sleep(1.0)
+
+def is_private_ip(ip):
+    try:
+        return ipaddress.ip_address(ip).is_private
+    except Exception:
+        return False
+
+def geo_fallback_ipapi(ip: str) -> dict:
+    try:
+        url = f"http://ip-api.com/json/{ip}?fields=status,country,lat,lon,org,message"
+        r = requests.get(url, timeout=5)
+        j = r.json()
+        if j.get("status") != "success":
+            return {"lat": None, "lon": None, "country": None, "asn": j.get("org")}
+        return {"lat": float(j.get("lat")), "lon": float(j.get("lon")), "country": j.get("country"), "asn": j.get("org")}
+    except Exception as e:
+        print(f"[GEO-FALLBACK] error for {ip}: {e}")
+        return {"lat": None, "lon": None, "country": None, "asn": None}
+
+# helper: unified cache key
+def enrich_cache_key(ip: str) -> str:
+    return f"enrich:{ip}"
+
+# call this instead of cache_get(ip)
+def get_enrich_cache(ip: str):
+    item = cache_get(enrich_cache_key(ip))
+    return item  # item is expected { "abuse":..., "geo": {...}, "ts": ... } or None
+
+# set unified enrichment cache
+def set_enrich_cache(ip: str, abuse, geo):
+    cache_set(enrich_cache_key(ip), {"abuse": abuse, "geo": geo})
+
+# patched geolocate_with_fallback that defers to cache properly
+def geolocate_with_fallback(ip: str) -> dict:
+    # 1) private/reserved
+    if is_private_ip(ip):
+        return {"lat": None, "lon": None, "country": "private", "asn": None}
+
+    # 2) check unified enrichment cache first
+    cached = get_enrich_cache(ip)
+    if cached:
+        geo = cached.get("geo", {})
+        # treat 0.0 or None as missing -> force re-resolve
+        lat = geo.get("lat")
+        lon = geo.get("lon")
+        if lat is not None and lon is not None and not (lat == 0.0 and lon == 0.0):
+            return geo
+
+    # 3) local GeoLite
+    geo = geolocate_ip(ip)
+    if geo.get("lat") is not None and geo.get("lon") is not None and not (geo.get("lat") == 0.0 and geo.get("lon") == 0.0):
+        return geo
+
+    # 4) external fallback (ip-api)
+    fb = geo_fallback_ipapi(ip)
+    if fb.get("lat") is not None and fb.get("lon") is not None:
+        return fb
+
+    # 5) last resort: return partial info (None coords)
+    return {"lat": None, "lon": None, "country": fb.get("country") or geo.get("country"), "asn": fb.get("asn") or geo.get("asn") or None}
+
 
 if __name__ == "__main__":
     uvicorn.run("server_enrich_debug:app", host="0.0.0.0", port=8000, reload=False)

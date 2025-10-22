@@ -1,3 +1,8 @@
-{"ip": "203.0.113.1", "magnitude": 500, "ts": 1678886400, "packet_rate": 200}
-{"ip": "198.51.100.5", "magnitude": 100, "ts": 1678886401}
-{"ip": "172.31.255.1", "magnitude": 900, "ts": 1678886402, "packet_rate": 50}
+{"ip":"8.8.8.8","magnitude":5,"packet_rate":1000,"ts":1729600000}
+{"ip":"8.8.4.4","magnitude":3,"packet_rate":500,"ts":1729600001}
+{"ip":"1.1.1.1","magnitude":4,"packet_rate":800,"ts":1729600002}
+{"ip":"1.0.0.1","magnitude":2,"packet_rate":200,"ts":1729600003}
+{"ip":"9.9.9.9","magnitude":4,"packet_rate":700,"ts":1729600004}
+{"ip":"208.67.222.222","magnitude":2,"packet_rate":300,"ts":1729600005}
+{"ip":"52.95.110.1","magnitude":6,"packet_rate":1500,"ts":1729600006}   # example AWS IP (may map to provider region)
+{"ip":"13.107.21.200","magnitude":2,"packet_rate":150,"ts":1729600007}  # Microsoft IP (may map to region)
