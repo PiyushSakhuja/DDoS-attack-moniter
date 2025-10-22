@@ -1,0 +1,122 @@
+<!-- static/index.html -->
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Live DDoS Map - Prototype</title>
+  <style>
+    html,body { height:100%; margin:0; background:#0b1020; color:#eee; }
+    #globeViz { width:100%; height:100vh; }
+    .badge { position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,0.5); padding:8px 12px; border-radius:6px; font-family: sans-serif; }
+  </style>
+</head>
+<body>
+  <div class="badge">Live DDoS Map — prototype (mock data)</div>
+  <div id="globeViz"></div>
+
+  <!-- three.js and globe.gl via unpkg -->
+  <script src="https://unpkg.com/three@0.126.1/build/three.min.js"></script>
+  <script src="https://unpkg.com/three-globe"></script>
+
+  <script>
+    // create the globe
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    document.getElementById('globeViz').appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera();
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    camera.position.z = 300;
+
+    const globe = new ThreeGlobe()
+      .globeImageUrl('//unpkg.com/three-globe/example/img/earth-dark.jpg')
+      .bumpImageUrl('//unpkg.com/three-globe/example/img/earth-topology.png');
+
+    scene.add(globe);
+
+    // lights
+    scene.add(new THREE.AmbientLight(0xbbbbbb));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+    dirLight.position.set(5, 3, 5);
+    scene.add(dirLight);
+
+    // handle resize
+    window.addEventListener('resize', () => {
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+    });
+
+    // data for points
+    let points = [];
+
+    function addAttackEvent(ev) {
+      // ev: {ip, lat, lon, confidence, magnitude, ts}
+      // convert lat/lon to three-globe format:
+      points.push({
+        lat: ev.lat,
+        lng: ev.lon,
+        size: Math.max(1, Math.log(ev.magnitude + 1)),
+        color: ev.confidence > 0.7 ? 'red' : (ev.confidence > 0.4 ? 'orange' : 'yellow'),
+        ip: ev.ip,
+        confidence: ev.confidence,
+        ts: ev.ts
+      });
+
+      // keep only recent 200 points to avoid slowdowns
+      if (points.length > 200) points.shift();
+      globe.pointsData(points);
+    }
+
+    // websocket connection
+    const ws = new WebSocket(`ws://${location.host}/ws`);
+    ws.onopen = () => {
+      // send a dummy ping to keep connection alive in server loop
+      setInterval(() => ws.send('ping'), 15000);
+    };
+    ws.onmessage = (m) => {
+      try {
+        const ev = JSON.parse(m.data);
+        addAttackEvent(ev);
+      } catch (e) { console.error(e); }
+    };
+
+    // point styling and pulse animation
+    globe.pointAltitude('size')
+         .pointRadius(0.7)
+         .pointsTransitionDuration(0)
+         .pointsMerge(true)
+         .pointColor(d => d.color);
+
+    // rotate animation
+    (function animate() {
+      globe.rotateY(0.001);
+      renderer.render(scene, camera);
+      requestAnimationFrame(animate);
+    })();
+
+    // basic hover tooltip
+    const tooltip = document.createElement('div');
+    tooltip.style.position = 'absolute';
+    tooltip.style.pointerEvents = 'none';
+    tooltip.style.padding = '6px 8px';
+    tooltip.style.background = 'rgba(0,0,0,0.6)';
+    tooltip.style.color = 'white';
+    tooltip.style.borderRadius = '4px';
+    tooltip.style.display = 'none';
+    tooltip.style.fontFamily = 'sans-serif';
+    document.body.appendChild(tooltip);
+
+    renderer.domElement.addEventListener('mousemove', (ev) => {
+      const elx = ev.clientX, ely = ev.clientY;
+      const intersects = globe.getObjectsAtCoords ? globe.getObjectsAtCoords(elx, ely) : null;
+      // three-globe doesn't expose convenient pick by default in this minimal example,
+      // so we'll skip accurate hover. Keep tooltip hidden.
+      tooltip.style.display = 'none';
+    });
+  </script>
+</body>
+</html>
